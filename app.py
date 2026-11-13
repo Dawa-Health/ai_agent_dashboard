@@ -6,54 +6,8 @@ import time
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.parse import quote, urlencode
-from urllib import request as urllib_request
-from urllib.error import HTTPError, URLError
-try:
-    import requests
-except ModuleNotFoundError:
-    class SimpleResponse:
-        def __init__(self, status_code, text):
-            self.status_code = status_code
-            self.text = text
-            self.ok = 200 <= status_code < 300
-
-        def json(self):
-            return json.loads(self.text or "{}")
-
-        def raise_for_status(self):
-            if not self.ok:
-                raise RuntimeError(f"HTTP request failed with status {self.status_code}: {self.text}")
-
-    class RequestsFallback:
-        @staticmethod
-        def get(url, params=None, headers=None, timeout=None):
-            if params:
-                separator = "&" if "?" in url else "?"
-                url = f"{url}{separator}{urlencode(params)}"
-            return RequestsFallback._request("GET", url, headers=headers, timeout=timeout)
-
-        @staticmethod
-        def post(url, headers=None, json=None, timeout=None):
-            body = None
-            request_headers = dict(headers or {})
-            if json is not None:
-                body = globals()["json"].dumps(json).encode("utf-8")
-                request_headers.setdefault("Content-Type", "application/json")
-            return RequestsFallback._request("POST", url, headers=request_headers, data=body, timeout=timeout)
-
-        @staticmethod
-        def _request(method, url, headers=None, data=None, timeout=None):
-            req = urllib_request.Request(url, data=data, headers=headers or {}, method=method)
-            try:
-                with urllib_request.urlopen(req, timeout=timeout) as response:
-                    return SimpleResponse(response.status, response.read().decode("utf-8"))
-            except HTTPError as exc:
-                return SimpleResponse(exc.code, exc.read().decode("utf-8"))
-            except URLError as exc:
-                raise RuntimeError(str(exc)) from exc
-
-    requests = RequestsFallback()
+from urllib.parse import quote
+import requests
 from flask import Flask, request, jsonify, send_from_directory, abort
 
 app = Flask(__name__)
@@ -331,14 +285,16 @@ def webhook():
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
 
-        if mode == "subscribe" and token == VERIFY_TOKEN:
+        if mode == "subscribe" and VERIFY_TOKEN and token == VERIFY_TOKEN:
             return challenge, 200
         else:
             return 'Forbidden', 403
 
     elif request.method == 'POST':
         try:
-            data = request.get_json()
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                return jsonify({'status': 'bad_request'}), 400
             print(f"Incoming webhook data: {data}")
 
             if data.get('object') == 'whatsapp_business_account':
@@ -381,9 +337,11 @@ def webhook():
 @app.route('/sendWhatsApp', methods=['POST'])
 def send_whatsapp():
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         recipient = data.get("to")
         message = data.get("message")
+        if not recipient or not message:
+            return jsonify({"status": "error", "message": "'to' and 'message' are required"}), 400
 
         url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
         headers = {
@@ -397,7 +355,11 @@ def send_whatsapp():
             "text": {"body": message}
         }
 
-        r = requests.post(url, headers=headers, json=payload)
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=15)
+        except Exception as exc:
+            print("WhatsApp API unreachable:", exc)
+            return jsonify({"status": "error", "message": "Could not reach WhatsApp API"}), 502
 
         # Debug log
         print("WhatsApp API response:", r.status_code, r.text)

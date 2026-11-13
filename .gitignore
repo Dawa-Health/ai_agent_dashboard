@@ -9,3 +9,8 @@ coverage/
 __pycache__/
 .DS_Store
 *.log
+.venv/
+__pycache__/
+.coverage
+coverage.xml
+.DS_Store
