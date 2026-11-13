@@ -61,13 +61,13 @@ app = Flask(__name__)
 # ------------------------------------------------
 # 🔑 WhatsApp Cloud API credentials
 
-WHATSAPP_TOKEN = "EAARXw3STgtMBPc3ZCOBukJUSor36yXhTzOqkfLgy4y20nZCUmkFVpszm3N0TEZBkXZBzZBh9c4x6gYJcf0di3oWIDogZCcAul3mHmQJBsJqIe7Yet5HgOsVyR27XJF1jcDjc0DnzNZA0gFedmuOUDA3JRFkeuWvE5L6LmvaEPFJlAVrU322PHZADK1sKZBZAZAAdsZAgqQZDZD"
-PHONE_NUMBER_ID = "810217165499672"  # from Meta dashboard
+WHATSAPP_TOKEN = "********************"
+PHONE_NUMBER_ID = "********************"  # from Meta dashboard
 VERIFY_TOKEN = "BOT"  
 # ------------------------------------------------
 
-UPSTASH_REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "https://oriented-gibbon-64178.upstash.io")
-UPSTASH_REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_TOKEN", "AfqyAAIncDI4M2Y5OTViZTBjNmE0NzdmODE0MWJkNzIzZDgwZDlkZXAyNjQxNzg")
+UPSTASH_REDIS_URL = os.environ.get("UPSTASH_REDIS_URL", "********************")
+UPSTASH_REDIS_TOKEN = os.environ.get("UPSTASH_REDIS_TOKEN", "********************")
 
 QR_CLINICS = [
     {"name": "Mandebvu Clinic", "color": "#09f128"},
