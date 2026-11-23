@@ -10,13 +10,14 @@
   };
 
   const PROFILE_KEY = 'userProfileData';
+  function profileKey() { return `${PROFILE_KEY}:${window.firebase?.auth().currentUser?.uid || 'signed-out'}`; }
   const SESSION_KEY = 'rudoSessionActive';
   const REDIRECT_KEY = 'rudoRedirectAfterLogin';
 
   const defaultProfile = {
     name: 'Rudo Admin',
     title: 'Workspace Administrator',
-    role: 'Admin',
+    role: 'Unverified',
     email: 'admin@dawa.health',
     phone: '+263 77 123 4567',
     bio: 'Managing Rudo conversations, orders, referrals, and healthcare support workflows for the Dawa Health team.',
@@ -29,6 +30,8 @@
   };
 
   let authReadyPromise;
+  let observedUid;
+  let signingOut = false;
 
   function hasFirebase() {
     return Boolean(window.firebase && window.firebase.initializeApp && window.firebase.auth);
@@ -44,7 +47,7 @@
 
   function parseStoredProfile() {
     try {
-      return JSON.parse(localStorage.getItem(PROFILE_KEY) || '{}');
+      return JSON.parse(localStorage.getItem(profileKey()) || '{}');
     } catch (error) {
       return {};
     }
@@ -52,7 +55,7 @@
 
   function saveProfile(profile) {
     const merged = { ...defaultProfile, ...parseStoredProfile(), ...profile };
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(merged));
+    localStorage.setItem(profileKey(), JSON.stringify(merged));
     return merged;
   }
 
@@ -80,49 +83,59 @@
     sessionStorage.removeItem(REDIRECT_KEY);
   }
 
-  function authReady() {
-    if (authReadyPromise) return authReadyPromise;
-    authReadyPromise = new Promise((resolve) => {
-      if (!hasFirebase()) {
-        resolve(null);
-        return;
-      }
-
-      initFirebase();
-      window.firebase.auth().onAuthStateChanged((user) => {
-        if (user) markSignedIn(user);
-        resolve(user);
-      }, () => resolve(null));
-    });
-    return authReadyPromise;
+  async function authReady() {
+    if (signingOut || !hasFirebase()) return null;
+    if (!authReadyPromise) {
+      authReadyPromise = new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), 10000);
+        initFirebase();
+        window.firebase.auth().onAuthStateChanged((user) => {
+          clearTimeout(timer);
+          const uid = user?.uid || null;
+          if (observedUid !== undefined && observedUid !== uid) {
+            if (observedUid) localStorage.removeItem(`${PROFILE_KEY}:${observedUid}`);
+            localStorage.removeItem('rudoAccountSettings');
+            localStorage.removeItem(SESSION_KEY);
+            window.dispatchEvent(new CustomEvent('rudo-identity-changed'));
+          }
+          observedUid = uid;
+          if (user && !signingOut) markSignedIn(user);
+          resolve(true);
+        }, () => { clearTimeout(timer); resolve(false); });
+      });
+    }
+    const initialized = await authReadyPromise;
+    return initialized && !signingOut ? window.firebase.auth().currentUser : null;
   }
 
   async function requireAuth(options = {}) {
-    const redirectTo = options.redirectTo || 'login.html';
-
-    if (!hasFirebase()) {
-      if (localStorage.getItem(SESSION_KEY) === 'true') return null;
-      sessionStorage.setItem(REDIRECT_KEY, window.location.pathname.split('/').pop() || 'index2.html');
-      window.location.replace(redirectTo);
-      return null;
-    }
-
-    initFirebase();
     const user = await authReady();
-    if (!user && localStorage.getItem(SESSION_KEY) !== 'true') {
+    if (!user) {
+      clearSession();
       sessionStorage.setItem(REDIRECT_KEY, window.location.pathname.split('/').pop() || 'index2.html');
-      window.location.replace(redirectTo);
+      window.location.replace(options.redirectTo || 'login.html');
+      throw new Error('Please sign in to continue.');
+    }
+    if (window.RudoApi) {
+      const staff = await RudoApi.request('/api/me');
+      saveProfile({ role: staff.role });
     }
     return user;
   }
 
-  function redirectAfterLogin(defaultTarget = 'index2.html') {
-    const target = sessionStorage.getItem(REDIRECT_KEY) || defaultTarget;
+      function redirectAfterLogin(defaultTarget = 'index2.html') {
+    const candidate = sessionStorage.getItem(REDIRECT_KEY) || defaultTarget;
+    const target = /^(index2?|chats|orders|analytics|profile|settings|staff)\.html$|^observer\.html(#(conversations|orders|referrals|analytics))?$/.test(candidate) ? candidate : 'observer.html';
     sessionStorage.removeItem(REDIRECT_KEY);
     window.location.href = target;
   }
 
   async function signOut(redirectTo = 'login.html') {
+    signingOut = true;
+    window.dispatchEvent(new CustomEvent('rudo-identity-changed'));
+    localStorage.removeItem(profileKey());
+    localStorage.removeItem(PROFILE_KEY);
+    localStorage.removeItem('rudoAccountSettings');
     clearSession();
     try {
       if (hasFirebase()) {
@@ -139,14 +152,15 @@
     const user = firebase?.auth().currentUser;
 
     if (!user) {
-      localStorage.removeItem(PROFILE_KEY);
+      localStorage.removeItem(profileKey());
       clearSession();
-      return { ok: true, message: 'Local account data was cleared.' };
+      throw new Error('Please sign in again before deleting your account.');
     }
 
     try {
+      const key = profileKey();
       await user.delete();
-      localStorage.removeItem(PROFILE_KEY);
+      localStorage.removeItem(key);
       clearSession();
       return { ok: true, message: 'Your account has been deleted.' };
     } catch (error) {
@@ -202,7 +216,19 @@
     target.hidden = false;
   }
 
+  // Signed-out visitors to protected pages go to the sign-in page and come back afterwards.
+  async function requireSignedIn() {
+    const user = await authReady();
+    if (!user && !signingOut) {
+      sessionStorage.setItem(REDIRECT_KEY, (window.location.pathname.split('/').pop() || 'observer.html') + window.location.hash);
+      window.location.replace('login.html');
+    }
+    return user;
+  }
+
   window.RudoAuth = {
+    requireSignedIn,
+    currentUid: () => (hasFirebase() ? window.firebase.auth().currentUser?.uid : undefined),
     PROFILE_KEY,
     SESSION_KEY,
     defaultProfile,

@@ -112,16 +112,14 @@
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
   <script src="js/rudo-auth.js"></script>
+  <script src="js/rudo-api.js"></script>
   <script src="js/admin-shell.js"></script>
   <script>
     AdminShell.setupShell('orders');
 
-    const CONFIG = {
-      endpoint: '****************',
-      token: '****************'
-    };
 
-    const orderSearch = document.getElementById('orderSearch');
+
+        const orderSearch = document.getElementById('orderSearch');
     const statusFilter = document.getElementById('statusFilter');
     const ordersContainer = document.getElementById('ordersContainer');
     const ordersState = document.getElementById('ordersState');
@@ -170,35 +168,9 @@
       return value && typeof value === 'object' ? value : null;
     }
 
-    async function upstashGet(key) {
-      const response = await fetch(`${CONFIG.endpoint}/get/${encodeURIComponent(key)}`, {
-        headers: { Authorization: `Bearer ${CONFIG.token}` }
-      });
-      if (!response.ok) return null;
-      const data = await response.json();
-      return data.result;
-    }
 
-    async function upstashSet(key, value) {
-      await fetch(`${CONFIG.endpoint}/set/${encodeURIComponent(key)}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${CONFIG.token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(value)
-      });
-    }
 
-    function seedMockOrders() {
-      return [
-        { _key: 'orders:1', orderId: 'ORD-1001', customerPhone: '263771234567', product: 'Blood pressure refill', amount: '45.00', status: 'pending', timestamp: new Date().toISOString(), actionLabel: 'Review' },
-        { _key: 'orders:2', orderId: 'ORD-1002', customerPhone: '263774567890', product: 'ANC registration pack', amount: '25.00', status: 'confirmed', timestamp: new Date(Date.now() - 86400000).toISOString(), actionLabel: 'View' },
-        { _key: 'orders:3', orderId: 'ORD-1003', customerPhone: '263778889999', product: 'Lab pickup booking', amount: '15.00', status: 'completed', timestamp: new Date(Date.now() - 172800000).toISOString(), actionLabel: 'Open' }
-      ];
-    }
-
-    function setOrdersLoading(isLoading) {
+        function setOrdersLoading(isLoading) {
       document.querySelectorAll('.metrics-grid .metric-card').forEach((card) => card.classList.toggle('is-skeleton-card', isLoading));
       document.getElementById('refreshOrders').disabled = isLoading;
       document.getElementById('refreshOrders').textContent = isLoading ? 'Refreshing...' : 'Refresh';
@@ -212,57 +184,24 @@
     }
 
     async function fetchOrders() {
-      ordersState.textContent = 'Refreshing orders...';
-      setOrdersLoading(true);
+      setOrdersLoading(true); ordersState.textContent = 'Refreshing orders...';
       try {
-        const results = [];
-        let cursor = '0';
-        do {
-          const response = await fetch(`${CONFIG.endpoint}/scan/${cursor}?match=orders:*&count=100`, {
-            headers: { Authorization: `Bearer ${CONFIG.token}` }
-          });
-          if (!response.ok) throw new Error(`Redis scan failed with ${response.status}`);
-          const data = await response.json();
-          cursor = data.result[0];
-          const keys = data.result[1] || [];
-
-          for (const key of keys) {
-            const raw = await upstashGet(key);
-            if (!raw) continue;
-            try {
-              const order = parseOrderPayload(raw);
-              if (!order) throw new Error('Payload was not valid JSON');
-              results.push({
-                _key: key,
-                orderId: order.orderId || order.order_id || order.user_id || key.split(':').pop() || 'Unknown',
-                customerPhone: order.customerPhone || order.sender || order.phone || order.user_id || 'Unknown',
-                product: order.product || order.item || order.service || 'Unspecified item',
-                quantity: order.quantity || order.qty || null,
-                amount: order.amount || order.price || order.total || '0',
-                address: order.address || order.location || order.deliveryAddress || null,
-                status: normalizeStatus(order.status),
-                timestamp: order.timestamp || order.createdAt || new Date().toISOString(),
-                actionLabel: order.actionLabel || 'Open',
-                raw: order
-              });
-            } catch (error) {
-              console.error('Failed to parse order', key, error);
-            }
-          }
-        } while (cursor !== '0');
-
-        orders = results.length ? results.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) : seedMockOrders();
-        ordersState.textContent = results.length ? `Loaded ${results.length} live order(s).` : 'No live orders were found, so a safe preview list is shown.';
-      } catch (error) {
-        orders = seedMockOrders();
-        ordersState.textContent = `Live orders could not be loaded. Showing fallback data instead: ${error.message}`;
-      } finally {
-        setOrdersLoading(false);
-      }
-      renderOrders();
+        const rows = await RudoApi.all('/api/orders');
+        orders = rows.map(row => {
+          const order = row.payload;
+          return { ...order, _key: row.id, version: row.version, raw: order,
+            orderId: order.orderId || order.order_id || row.id,
+            customerPhone: order.customerPhone || order.sender || order.phone || 'Unknown',
+            product: order.product || order.item || order.service || 'Unspecified item',
+            amount: order.amount || order.price || order.total || '',
+            timestamp: row.created_at, status: row.status };
+        });
+        ordersState.textContent = `Loaded ${orders.length} order(s).`;
+      } catch (error) { orders = []; ordersState.textContent = error.message; }
+      finally { setOrdersLoading(false); renderOrders(); }
     }
 
-    function filteredOrders() {
+        function filteredOrders() {
       const query = orderSearch.value.trim().toLowerCase();
       const dropdownStatus = statusFilter.value;
 
@@ -300,27 +239,16 @@
     }
 
     async function saveStatus(order, select, button) {
-      const status = normalizeStatus(select.value);
       button.disabled = true;
-      button.textContent = 'Saving...';
       try {
-        const raw = await upstashGet(order._key);
-        const fullOrder = (raw ? parseOrderPayload(raw) : null) || order.raw || {};
-        fullOrder.status = status;
-        await upstashSet(order._key, JSON.stringify(fullOrder));
-        order.status = status;
-        ordersState.textContent = `Status updated for ${order.orderId}.`;
-      } catch (error) {
-        order.status = status;
-        ordersState.textContent = `Order saved locally but could not be confirmed in Redis: ${error.message}`;
-      } finally {
-        button.disabled = false;
-        button.textContent = 'Save';
-        renderOrders();
-      }
+        const row = await RudoApi.request(`/api/orders/${order._key}`, { method: 'PATCH', body: JSON.stringify({ status: normalizeStatus(select.value), version: order.version }) });
+        order.status = row.status; order.version = row.version;
+        ordersState.textContent = 'Order status saved.';
+      } catch (error) { ordersState.textContent = error.message; }
+      finally { button.disabled = false; renderOrders(); }
     }
 
-    function renderOrders() {
+        function renderOrders() {
       updateStats();
       const visibleOrders = filteredOrders();
 

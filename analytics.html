@@ -9,7 +9,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="img/logo.ico">
   <link rel="stylesheet" href="css/admin-light.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="js/vendor/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
   <style>
     /* Clinical intents card — matches the light card styling already used across analytics.html */
     .intents-grid {
@@ -307,13 +307,12 @@
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
   <script src="js/rudo-auth.js"></script>
+  <script src="js/rudo-api.js"></script>
   <script src="js/admin-shell.js"></script>
   <script src="js/risk-triage.js"></script>
   <script>
     AdminShell.setupShell('analytics');
 
-    const REDIS_URL = '***********************';
-    const REDIS_TOKEN = '***********************';
     const notice = document.getElementById('analyticsNotice');
 
     const startDate = document.getElementById('startDate');
@@ -489,114 +488,17 @@
      */
     async function loadQRAnalytics() {
       setQRLoading(true);
-      qrStatus.textContent = 'Loading referral data…';
-      qrTotalRecords.textContent = '0 referral record(s)';
-      qrError.textContent = '';
-
-      // Zero out the chart while loading
-      QR_CLINICS.forEach((_, i) => {
-        qrChart.data.datasets[i].data = [0, 0];
-      });
-      qrChart.update();
-
       try {
-        // 1. Scan all referral keys from Redis
-        let allKeys = [];
-        let cursor = '0';
-        do {
-          const res = await fetch(
-            `${REDIS_URL}/scan/${cursor}?match=${encodeURIComponent('referrals*')}&count=100`,
-            { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
-          );
-          if (!res.ok) throw new Error(`Redis scan failed: ${res.status}`);
-          const json = await res.json();
-          cursor = json.result[0];
-          const chunk = json.result[1] || [];
-          if (Array.isArray(chunk)) allKeys.push(...chunk);
-        } while (cursor !== '0');
-
-        allKeys = [...new Set(allKeys)];
-        qrTotalRecords.textContent = `${allKeys.length} referral record(s)`;
-
-        if (allKeys.length === 0) {
-          showQRState('empty', 'No referral scans yet', 'QR referral records will appear here after poster or flyer scans are saved.');
-          qrStatus.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-          return;
-        }
-
-        // 2. Fetch every record and tally counts[clinicIndex][sourceIndex]
-        const counts = QR_CLINICS.map(() => [0, 0]);
-        let malformed = 0;
-
-        await Promise.all(allKeys.map(async (key) => {
-          try {
-            const res = await fetch(
-              `${REDIS_URL}/get/${encodeURIComponent(key)}`,
-              { headers: { Authorization: `Bearer ${REDIS_TOKEN}` } }
-            );
-            if (!res.ok) return;
-            const json = await res.json();
-            if (!json.result) return;
-
-            const data = JSON.parse(json.result);
-            const src  = (data.source || '').trim();   // e.g. "N'gombe Clinic Poster 2"
-
-            if (!src) { malformed++; return; }
-
-            // Determine source type (Poster 2 excluded from analysis)
-            let srcIdx = -1;
-            if (/poster\s*1/i.test(src)) srcIdx = 0;
-            else if (/flyer/i.test(src)) srcIdx = 1;
-            if (srcIdx === -1) return;   // unrecognised / Poster 2 — skip
-
-            // Determine clinic
-            const clinicIdx = QR_CLINICS.findIndex((c) =>
-              src.toLowerCase().includes(c.name.toLowerCase())
-            );
-            if (clinicIdx === -1) return;  // unrecognised clinic — skip
-
-            counts[clinicIdx][srcIdx]++;
-          } catch (_) {
-            malformed++;  // skip malformed / unparseable records
-          }
-        }));
-
-        // 3. Push tallied counts into the chart
-        QR_CLINICS.forEach((_, i) => {
-          qrChart.data.datasets[i].data = counts[i];
-        });
-        qrChart.update();
-
-        // 4. Check if anything actually matched the configured clinics/sources
-        const totalMatched = counts.reduce((sum, row) => sum + row.reduce((s, v) => s + v, 0), 0);
-        if (totalMatched === 0) {
-          showQRState(
-            'empty',
-            'No matched QR referrals',
-            'Referral records loaded, but none matched the configured clinics and source labels yet.'
-          );
-        } else {
-          qrState.hidden = true;
-          qrState.innerHTML = '';
-        }
-
-        qrStatus.textContent = `Updated: ${new Date().toLocaleTimeString()} · ${allKeys.length} record(s)`;
-
-        if (malformed > 0) {
-          qrError.textContent = `Some referral records were skipped because they were empty or malformed (${malformed}).`;
-        }
-
-      } catch (err) {
-        console.error('loadQRAnalytics error:', err);
-        qrStatus.textContent = 'Last updated unavailable';
-        qrTotalRecords.textContent = '0 referral record(s)';
-        showQRState('error', 'Could not load referral data', `The graph could not refresh right now. ${err.message}`);
-      } finally {
-        setQRLoading(false);
-      }
+        const data = await RudoApi.request('/api/qr-analytics');
+        QR_CLINICS.forEach((clinic, i) => { qrChart.data.datasets[i].data = [data.counts[clinic.name]['Poster 1'], data.counts[clinic.name]['Flyer']]; });
+        qrChart.update(); qrTotalRecords.textContent = `${data.totalRecords} referral record(s)`;
+        qrStatus.textContent = 'Updated. This chart retains Poster 1 and Flyer; Poster 2 is available in the API pending reporting review.';
+        qrError.textContent = ''; qrState.hidden = true;
+      } catch (error) { showQRState('error', 'Referral analytics unavailable', error.message); }
+      finally { setQRLoading(false); }
     }
 
-    // ── Conversation analytics (unchanged from original) ───────────────────────
+        // ── Conversation analytics (unchanged from original) ───────────────────────
     function extractPhoneNumber(key) {
       return key.startsWith('conversation:') ? key.slice(13) : key;
     }
@@ -611,66 +513,9 @@
       return date && !Number.isNaN(date.getTime()) ? date : null;
     }
 
-    async function scanKeys(pattern) {
-      const results = [];
-      let cursor = '0';
-      do {
-        const response = await fetch(`${REDIS_URL}/scan/${cursor}?match=${encodeURIComponent(pattern)}&count=100`, {
-          headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
-        });
-        if (!response.ok) throw new Error(`Redis scan failed with ${response.status}`);
-        const data = await response.json();
-        cursor = data.result[0];
-        results.push(...(data.result[1] || []));
-      } while (cursor !== '0');
-      return [...new Set(results)];
-    }
 
-    async function getJsonValue(key) {
-      const response = await fetch(`${REDIS_URL}/get/${encodeURIComponent(key)}`, {
-        headers: { Authorization: `Bearer ${REDIS_TOKEN}` }
-      });
-      if (!response.ok) return null;
-      const data = await response.json();
-      if (!data.result) return null;
-      try {
-        return JSON.parse(data.result);
-      } catch (error) {
-        return null;
-      }
-    }
 
-    function seedMockData() {
-      return [
-        {
-          key: 'conversation:263771234567',
-          phone: '263771234567',
-          messages: [
-            { role: 'user', message: 'Hi, I want to register for maternal care.', timestamp: new Date(today.getTime() - 86400000 * 5).toISOString() },
-            { role: 'bot', message: 'Sure, let me guide you through registration.', timestamp: new Date(today.getTime() - 86400000 * 5 + 600000).toISOString() },
-            { role: 'user', message: 'Can I place an order for medication?', timestamp: new Date(today.getTime() - 86400000 * 2).toISOString() }
-          ]
-        },
-        {
-          key: 'conversation:263774567890',
-          phone: '263774567890',
-          messages: [
-            { role: 'user', message: 'I need my lab results.', timestamp: new Date(today.getTime() - 86400000 * 3).toISOString() },
-            { role: 'bot', message: 'I can help you check the next steps.', timestamp: new Date(today.getTime() - 86400000 * 3 + 480000).toISOString() }
-          ]
-        },
-        {
-          key: 'conversation:263778889999',
-          phone: '263778889999',
-          messages: [
-            { role: 'user', message: 'Payment proof sent for my order.', timestamp: new Date(today.getTime() - 86400000).toISOString() },
-            { role: 'bot', message: '✅ ORDER CONFIRMED', timestamp: new Date(today.getTime() - 86400000 + 360000).toISOString() }
-          ]
-        }
-      ];
-    }
-
-    function inferIntent(text) {
+        function inferIntent(text) {
       const lower = text.toLowerCase();
       if (/order|payment|delivery|price/.test(lower)) return 'Orders';
       if (/register|registration|sign up/.test(lower)) return 'Registration';
@@ -704,7 +549,7 @@
         if (!inRange) return;
 
         const lastText = getText(messages[messages.length - 1]);
-        const resolved = /resolved|closed|completed|confirmed/i.test(lastText);
+        const resolved = conversation.status === 'closed';
         const recentWindow = new Date();
         recentWindow.setDate(recentWindow.getDate() - 7);
         if (lastTimestamp && lastTimestamp >= recentWindow) activeChats++;
@@ -970,40 +815,19 @@
     }
 
     async function loadAnalytics() {
-      notice.textContent = 'Refreshing analytics...';
       setAnalyticsLoading(true);
       try {
-        const keys = await scanKeys('conversation*');
-        let conversations = await Promise.all(keys.map(async (key) => {
-          const messages = await getJsonValue(key);
-          return { key, phone: extractPhoneNumber(key), messages: Array.isArray(messages) ? messages : [] };
-        }));
-        conversations = conversations.filter((entry) => entry.messages.length);
-        if (!conversations.length) {
-          conversations = seedMockData();
-          notice.textContent = 'Live analytics data was empty, so a safe preview dataset is shown.';
-        } else {
-          notice.textContent = `Updated from ${conversations.length} live conversation thread(s).`;
-        }
+        const rows = await RudoApi.all('/api/conversations');
+        const conversations = rows.map(row => ({ key: row.id, phone: row.phone, messages: row.messages, status: row.status }));
         const analysis = analyseConversations(conversations);
-        updateMetrics(analysis);
-        updateCharts(analysis);
-        renderLists(analysis);
+        updateMetrics(analysis); updateCharts(analysis); renderLists(analysis);
         renderIntents(analyzeClinicalIntents(conversations));
-      } catch (error) {
-        const fallbackConversations = seedMockData();
-        const analysis = analyseConversations(fallbackConversations);
-        updateMetrics(analysis);
-        updateCharts(analysis);
-        renderLists(analysis);
-        renderIntents(analyzeClinicalIntents(fallbackConversations));
-        notice.textContent = `Live analytics could not be loaded. Showing fallback data instead: ${error.message}`;
-      } finally {
-        setAnalyticsLoading(false);
-      }
+        notice.textContent = `Updated from ${conversations.length} scoped conversation(s). Metrics retain legacy heuristic definitions pending review.`;
+      } catch (error) { notice.textContent = error.message; }
+      finally { setAnalyticsLoading(false); }
     }
 
-    // ── Kick everything off ────────────────────────────────────────────────────
+        // ── Kick everything off ────────────────────────────────────────────────────
     document.getElementById('refreshAnalytics').addEventListener('click', loadAnalytics);
     refreshQRBtn.addEventListener('click', () => loadQRAnalytics());
 

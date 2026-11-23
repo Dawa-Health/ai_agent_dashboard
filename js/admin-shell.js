@@ -11,7 +11,10 @@
     mountAccountModal();
 
     if (window.RudoAuth) {
-      window.RudoAuth.requireAuth({ redirectTo: 'login.html' }).then(refreshAccountMenus);
+      window.RudoAuth.requireAuth({ redirectTo: 'login.html' }).then(refreshAccountMenus).catch((error) => {
+        const notice = document.createElement('p'); notice.className = 'error-state';
+        notice.textContent = error.message; document.querySelector('main')?.prepend(notice);
+      });
     } else {
       refreshAccountMenus();
     }

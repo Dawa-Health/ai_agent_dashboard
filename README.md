@@ -1,108 +1,41 @@
-# AI Agent Dashboard
+# Rudo local observer
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+## Test Rudo on a Mac (demo mode, no passwords needed)
 
-A web dashboard for managing and monitoring an AI agent for healthcare workflows, built by [Dawa Health](https://github.com/Dawa-Health). It includes authentication pages, conversation (chat) views, analytics, order tracking, risk triage, and account settings.
+Follow **[docs/TARI_LOCAL_TESTING.md](docs/TARI_LOCAL_TESTING.md)**. After installing the tools, one command starts a synthetic demo with made-up data and no connection to production, Supabase, Firebase or WhatsApp:
 
-> **Status:** Work in progress. Not a medical device. Do not use it as the sole basis for clinical decisions.
-
-## Features
-
-- **Authentication**: login, registration, forgot/reset/change password
-- **Dashboard**: overview of agent activity (`index.html`)
-- **Chats**: browse and review agent conversations (`chats.html`)
-- **Analytics**: usage and performance charts (`analytics.html`)
-- **Orders**: view and track orders (`orders.html`)
-- **Risk triage**: client-side triage logic (`js/risk-triage.js`)
-- **Profile & settings**: user profile and preferences, including light/dark theme and layout settings
-
-## Tech Stack
-
-- **Frontend:** HTML, CSS, JavaScript, jQuery, Bootstrap
-- **Backend:** Python (`app.py`)
-- **Icons/Fonts:** Font Awesome, Ionicons, Themify, Foundation Icons, Dropways
-
-## Project Structure
-
-```
-.
-├── app.py                # Python backend
-├── requirements.txt      # Python dependencies
-├── index.html            # Main dashboard
-├── analytics.html        # Analytics
-├── chats.html            # Chat/conversation views
-├── orders.html           # Orders
-├── profile.html          # User profile
-├── settings.html         # Settings
-├── login.html / register.html / forgot-password.html /
-│   reset-password.html / change-password.html   # Auth pages
-├── css/                  # Stylesheets (theme, layout, UI refresh)
-├── js/                   # Scripts (auth, shell, triage, layout)
-├── fonts/                # Icon fonts
-└── img/                  # Images and logos
+```sh
+scripts/demo_mac.sh        # then open http://127.0.0.1:5051/observer.html   (stop: Control+C)
 ```
 
-## Getting Started
+Option C is implemented locally: a read-only Flask/Firebase dashboard over a synthetic version of the inspected six-table bot database, with explicit staff/account/facility scope and a separate append-only audit connection. **Production integration remains on HOLD.** No remote migrations, real patient imports, provider sends or deployment were performed.
 
-### Prerequisites
+Start with the [implementation and file map](docs/observer-implementation/README.md), [actual test results](docs/observer-implementation/TEST_RESULTS.md), [local runbook](docs/observer-implementation/RUNBOOK.md) and [proposed rollout/rollback](docs/observer-implementation/ROLLOUT.md).
 
-- Python 3.9+
-- pip
+Run the isolated synthetic suite (requires the existing `.venv`, PostgreSQL 17, Node and Chrome):
 
-### Installation
-
-```bash
-git clone https://github.com/Dawa-Health/ai_agent_dashboard.git
-cd ai_agent_dashboard
-
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+```sh
+scripts/test_local.sh
 ```
 
-### Configuration
+For an interactive local demo, start the disposable marked database if needed, then bootstrap and serve:
 
-Keep secrets such as API keys, tokens, and passwords out of the repository. Store them in environment variables or a `.env` file, which is listed in `.gitignore`. Add every variable `app.py` expects to this section, for example:
-
-```bash
-# Example only; replace with the variables your app actually uses
-export SECRET_KEY="change-me"
+```sh
+scripts/start_test_database.sh
+.venv/bin/python scripts/bootstrap_observer.py
+.venv/bin/python scripts/run_observer_demo.py
 ```
 
-### Run
+Open [the synthetic observer](http://127.0.0.1:5051/observer.html). Use the [runbook](docs/observer-implementation/RUNBOOK.md) for prerequisites, source-update demonstration and safe stop instructions. Tests and bootstrap reset synthetic schemas; stop the demo before running tests. Never point fixture tools at useful data.
 
-```bash
-python app.py
-```
+`RUDO_MODE=observer` is the default. Normal observer mode uses Firebase ID-token verification; the explicit demo entrypoint alone substitutes offline synthetic identities. Server-only reader/audit credentials remain separate, source writes and legacy mutations/webhooks are rejected, and remote observer DSNs are blocked regardless of other flags. The app reads process environment and does not load Supabase CLI credentials or link settings. `.env.example` contains configuration names only.
 
-Then open the URL printed in the terminal (commonly `http://localhost:5000`). If you only want to preview the static pages, you can also serve them from any web server, such as XAMPP or `python -m http.server`.
+The [remote schema comparison](docs/REMOTE_SCHEMA_COMPARISON.md) and [integration-readiness audit](docs/integration-readiness/README.md) are the architecture baseline. Earlier [private implementation](docs/LOCAL_IMPLEMENTATION.md) and [test results](docs/LOCAL_TEST_RESULTS.md) describe a historical stage. The private implementation remains explicitly selected for regression tests; its full migration is not the observer business database. Clinical triage remains unchanged, cake commerce excluded, and staff sending disabled. Two known private transport defects remain documented expected failures pending the authoritative sender contract.
 
-## Security & Privacy
+## Staff authentication migration (Supabase Auth)
 
-This project may handle sensitive health-related data. Before deploying:
+The staff-only Firebase → Supabase Auth foundation (issuer-routed verification, identity links that preserve roles and facility scopes, pending sign-ups, staff inventory, an idempotent import and admin approval) is described in [docs/auth-migration/README.md](docs/auth-migration/README.md). Firebase remains the default sign-in until staging verification. The exposed service-account key must be replaced first: see [docs/security/KEY_ROTATION.md](docs/security/KEY_ROTATION.md). Run `.venv/bin/python scripts/check_secrets.py` before `git init` or any commit.
 
-- Never commit credentials, tokens, or patient data
-- Serve over HTTPS
-- Apply access controls and audit logging appropriate to your jurisdiction (for example HIPAA or local health data regulations)
+## Production delivery (current)
 
-To report a vulnerability, contact the maintainers privately rather than opening a public issue.
-
-## Contributing
-
-1. Fork the repository
-2. Create a branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m "Add your feature"`
-4. Push the branch: `git push origin feature/your-feature`
-5. Open a pull request
-
-## License
-
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for the full text.
-
-SPDX-License-Identifier: AGPL-3.0
-
-If you run a modified version of this software as a network service, the AGPL requires you to offer the corresponding source code to its users.
-
-## Acknowledgments
-
-The UI is based on the DeskApp admin template and uses open-source libraries including Bootstrap, jQuery, and Font Awesome. Each remains under its own license. Check that your use of the template and its assets permits redistribution.
+Start with **[docs/HANDOVER.md](docs/HANDOVER.md)** (what works, how to sign in, test results, limitations) and **[docs/release/RELEASE_1.md](docs/release/RELEASE_1.md)** (the exact production change, blockers, steps, rollback and monitoring, awaiting approval). The staff/control schema is now the versioned migration `supabase/migrations/20261121120000_rudo_staff_control.sql`; the old private-mode draft lives in `staging/private/` and is used only by its regression tests.
