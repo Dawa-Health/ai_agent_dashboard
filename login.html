@@ -11,6 +11,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
   <script src="js/rudo-auth.js"></script>
+  <script src="js/rudo-api.js"></script>
   <style>
   #pinModalOverlay {
     position: fixed;
@@ -163,46 +164,7 @@
     // non-dismissible dialog until the correct PIN is entered.
     // NOTE: this is a client-side deterrent only, not real access control -
     // the PIN value is visible to anyone who reads this page's source.
-    (function setUpPinGate() {
-      const ACCESS_PIN = '785019';
-      const overlay = document.getElementById('pinModalOverlay');
-      const form = document.getElementById('pinModalForm');
-      const input = document.getElementById('pinModalInput');
-      const errorEl = document.getElementById('pinModalError');
-      const submitBtn = document.getElementById('pinModalSubmit');
-
-      function unlock() {
-        document.body.classList.remove('pin-locked');
-        overlay.setAttribute('hidden', '');
-        document.dispatchEvent(new Event('pin-verified'));
-      }
-
-      document.addEventListener('DOMContentLoaded', () => {
-        input.focus();
-      });
-
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        const value = input.value.trim();
-
-        if (!value) {
-          errorEl.textContent = 'Please enter the PIN.';
-          input.focus();
-          return;
-        }
-
-        if (value !== ACCESS_PIN) {
-          errorEl.textContent = 'Incorrect PIN. Please try again.';
-          input.value = '';
-          input.focus();
-          return;
-        }
-
-        errorEl.textContent = '';
-        submitBtn.disabled = true;
-        unlock();
-      });
-    })();
+    document.body.classList.remove('pin-locked'); document.getElementById('pinModalOverlay')?.remove();
 
     document.addEventListener('DOMContentLoaded', () => {
       const firebase = RudoAuth.initFirebase();

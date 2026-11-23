@@ -362,17 +362,15 @@
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
   <script src="js/rudo-auth.js"></script>
+  <script src="js/rudo-api.js"></script>
   <script src="js/admin-shell.js"></script>
   <script src="js/risk-triage.js"></script>
   <script>
     AdminShell.setupShell('dashboard');
 
-    const CONFIG = {
-      endpoint: '****************',
-      token: '****************'
-    };
 
-    function escape(value) {
+
+        function escape(value) {
       return AdminShell.escapeHtml(value);
     }
 
@@ -411,52 +409,9 @@
       return date && !Number.isNaN(date.getTime()) ? date : null;
     }
 
-    async function scan(pattern) {
-      const keys = [];
-      let cursor = '0';
-      do {
-        const response = await fetch(`${CONFIG.endpoint}/scan/${cursor}?match=${encodeURIComponent(pattern)}&count=100`, {
-          headers: { Authorization: `Bearer ${CONFIG.token}` }
-        });
-        if (!response.ok) throw new Error(`Redis scan failed with ${response.status}`);
-        const data = await response.json();
-        cursor = data.result[0];
-        keys.push(...(data.result[1] || []));
-      } while (cursor !== '0');
-      return [...new Set(keys)];
-    }
 
-    async function readValue(key) {
-      const response = await fetch(`${CONFIG.endpoint}/get/${encodeURIComponent(key)}`, {
-        headers: { Authorization: `Bearer ${CONFIG.token}` }
-      });
-      if (!response.ok) return null;
-      const data = await response.json();
-      if (!data.result) return null;
-      try {
-        return JSON.parse(data.result);
-      } catch (error) {
-        return null;
-      }
-    }
 
-    function seedDashboardData() {
-      return {
-        conversations: [
-          { key: 'conversation:263771234567', messages: [{ role: 'user', message: 'I have heavy bleeding during pregnancy and severe headache', timestamp: new Date().toISOString() }] },
-          { key: 'conversation:263774567890', messages: [{ role: 'user', message: 'Baby is not moving today and I feel fetal distress', timestamp: new Date(Date.now() - 3600000).toISOString() }] },
-          { key: 'conversation:263778889999', messages: [{ role: 'user', message: 'Postpartum hemorrhage started after delivery', timestamp: new Date(Date.now() - 7200000).toISOString() }] },
-          { key: 'conversation:263770001111', messages: [{ role: 'user', message: 'Need ANC registration support', timestamp: new Date(Date.now() - 10800000).toISOString() }] }
-        ],
-        orders: [
-          { status: 'pending', amount: '45.00' },
-          { status: 'confirmed', amount: '25.00' },
-          { status: 'completed', amount: '15.00' }
-        ]
-      };
-    }
-
-    function summarize(data, fallbackMode) {
+        function summarize(data, fallbackMode) {
       const conversations = data.conversations || [];
       const orders = data.orders || [];
       const now = new Date();
@@ -484,7 +439,7 @@
         const lastText = getText(lastMessage);
         const lastRole = String(lastMessage?.role || '').toLowerCase();
         const lastTime = getTimestamp(lastMessage) || now;
-        const resolved = /resolved|closed|completed|confirmed/i.test(lastText);
+        const resolved = conversation.status === 'closed';
 
         if (!resolved) openCount++;
         if (resolved && lastTime && lastTime >= todayStart) resolvedToday++;
@@ -591,15 +546,15 @@
       document.getElementById('systemHealth').innerHTML = [
         {
           label: 'Chat data source',
-          value: conversations.length ? 'Connected' : 'Fallback',
+          value: fallbackMode ? 'Unavailable' : 'Connected',
           tone: conversations.length ? 'ok' : 'warn',
-          detail: conversations.length ? `${conversations.length} threads` : 'Preview mode'
+          detail: `${conversations.length} threads`
         },
         {
           label: 'Order data source',
-          value: orders.length ? 'Connected' : 'Fallback',
+          value: fallbackMode ? 'Unavailable' : 'Connected',
           tone: orders.length ? 'ok' : 'warn',
-          detail: orders.length ? `${orders.length} orders` : 'Preview mode'
+          detail: `${orders.length} orders`
         },
         {
           label: 'High-risk triage',
@@ -655,27 +610,27 @@
 
     async function loadDashboard() {
       setDashboardLoading(true);
-      let fallbackMode = false;
       try {
-        const conversationKeys = await scan('conversation*');
-        const orderKeys = await scan('orders:*');
-        const conversations = (await Promise.all(conversationKeys.map(async (key) => ({ key, messages: await readValue(key) })))).filter((entry) => Array.isArray(entry.messages) && entry.messages.length);
-        const orders = (await Promise.all(orderKeys.map((key) => readValue(key)))).filter(Boolean);
-        if (!conversations.length && !orders.length) {
-          fallbackMode = true;
-          summarize(seedDashboardData(), true);
+        const me = await RudoApi.request('/api/me');
+        if (me.role === 'analyst') {
+          const totals = await RudoApi.request('/api/analytics');
+          document.getElementById('liveConversations').textContent = totals.conversations;
+          document.getElementById('ordersMetric').textContent = totals.orders;
+          document.getElementById('healthMetric').textContent = 'Aggregate only';
+          document.getElementById('lastSync').textContent = 'Scoped counts; raw clinical records are restricted.';
+          ['recentChats','priorityBreakdown','riskCategories','needsReplyList','ordersSummary','systemHealth'].forEach(id => document.getElementById(id).replaceChildren());
           return;
         }
-        summarize({ conversations, orders }, false);
+        const [rows, orderRows] = await Promise.all([RudoApi.all('/api/conversations'), RudoApi.all('/api/orders')]);
+        summarize({ conversations: rows.map(row => ({ key: row.phone, messages: row.messages, status: row.status })), orders: orderRows.map(row => ({ ...row.payload, status: row.status })) }, false);
       } catch (error) {
-        fallbackMode = true;
-        summarize(seedDashboardData(), true);
-      } finally {
-        setDashboardLoading(false);
-      }
+        document.getElementById('healthMetric').textContent = 'Unavailable';
+        document.getElementById('lastSync').textContent = error.message;
+        ['recentChats','priorityBreakdown','riskCategories','needsReplyList','ordersSummary','systemHealth'].forEach(id => document.getElementById(id).replaceChildren());
+      } finally { setDashboardLoading(false); }
     }
 
-    document.getElementById('refreshDashboard').addEventListener('click', loadDashboard);
+        document.getElementById('refreshDashboard').addEventListener('click', loadDashboard);
     document.getElementById('exportReport') && document.getElementById('exportReport').addEventListener('click', () => {
       const payload = {
         generatedAt: new Date().toISOString(),
